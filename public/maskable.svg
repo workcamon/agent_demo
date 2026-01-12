@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Maskable icon">
+  <rect width="512" height="512" fill="#0b1220"/>
+  <circle cx="256" cy="256" r="210" fill="#111a2e"/>
+  <rect x="150" y="170" width="212" height="44" rx="22" fill="#e5e7eb" opacity="0.95"/>
+  <rect x="150" y="242" width="212" height="44" rx="22" fill="#e5e7eb" opacity="0.90"/>
+  <rect x="150" y="314" width="150" height="44" rx="22" fill="#e5e7eb" opacity="0.85"/>
+  <rect x="328" y="212" width="120" height="120" rx="32" fill="#ef4444"/>
+  <path d="M374 272 356 261.6a4 4 0 0 1 0-6.9l18-10.4 18-10.4a4 4 0 0 1 6 3.5v41.2a4 4 0 0 1-6 3.5z" fill="#fff"/>
+</svg>
+
