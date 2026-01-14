@@ -15,6 +15,7 @@ import { formatTags, matchItem, parseTagsInput } from "./lib/search";
 import { extractFirstUrl, fetchYouTubeOEmbed, normalizeYouTubeUrl } from "./lib/youtube";
 import { formatDateTime } from "./lib/time";
 import { Modal } from "./components/Modal";
+import { decodeShareToState, encodeShareFromState, extractSharePayloadFromUrlOrHash } from "./lib/share";
 
 type ModalState =
   | { type: "addVideo"; presetUrl?: string; presetTitle?: string; presetText?: string }
@@ -23,6 +24,8 @@ type ModalState =
   | { type: "move"; fromPlaylistId: string; videoItemId: string }
   | { type: "importExport" }
   | { type: "bookmarklet" }
+  | { type: "shareLink" }
+  | { type: "applyImport"; encoded: string }
   | null;
 
 function pickDefaultPlaylistId(state: StoredStateV1) {
@@ -49,6 +52,24 @@ function parseHashQuery(): URLSearchParams {
   const idx = hash.indexOf("?");
   if (idx === -1) return new URLSearchParams();
   return new URLSearchParams(hash.slice(idx + 1));
+}
+
+function parseHashPath(): { path: string; query: URLSearchParams } {
+  // expected: #/something?x=1
+  const hash = window.location.hash || "";
+  const noHash = hash.startsWith("#") ? hash.slice(1) : hash;
+  const qIdx = noHash.indexOf("?");
+  const path = (qIdx === -1 ? noHash : noHash.slice(0, qIdx)) || "/";
+  const query = new URLSearchParams(qIdx === -1 ? "" : noHash.slice(qIdx + 1));
+  return { path, query };
+}
+
+function getBasePath() {
+  // 정적 호스팅에서 서브패스(/myapp/)로 배포되는 경우를 고려
+  const p = window.location.pathname;
+  if (p.endsWith("/")) return p;
+  if (p.endsWith(".html")) return p.replace(/[^/]+$/, "");
+  return p + "/";
 }
 
 export function App() {
@@ -86,26 +107,39 @@ export function App() {
       if (sharedUrl) hq.set("url", sharedUrl);
       if (title) hq.set("title", title);
       if (text) hq.set("text", text);
-      window.history.replaceState({}, "", "/#/?".concat(hq.toString()));
+      window.history.replaceState({}, "", getBasePath() + "#/?".concat(hq.toString()));
     }
   }, []);
 
   // deep link: #/?add=1&url=...
   useEffect(() => {
     function handleHash() {
-      const q = parseHashQuery();
-      const add = q.get("add");
-      const url = q.get("url") || "";
+      const { path, query } = parseHashPath();
+
+      // 1) 공유 링크 import: #/import?d=...
+      if (path === "/import") {
+        const d = query.get("d") || "";
+        if (d) {
+          setModal({ type: "applyImport", encoded: d });
+          // 다시 열려도 반복 실행되지 않도록 d 제거
+          query.delete("d");
+          const rest = query.toString();
+          window.history.replaceState({}, "", getBasePath() + (rest ? `#/import?${rest}` : "#/import"));
+          return;
+        }
+      }
+
+      // 2) add flow: #/?add=1&url=...
+      const add = query.get("add");
+      const url = query.get("url") || "";
       if (add === "1" && url) {
-        const title = q.get("title") || undefined;
-        const text = q.get("text") || undefined;
+        const title = query.get("title") || undefined;
+        const text = query.get("text") || undefined;
         setModal({ type: "addVideo", presetUrl: url, presetTitle: title, presetText: text });
-        // 동일 해시 반복 호출 방지: add=0으로 치환(사용자 히스토리는 유지)
-        const next = new URL(window.location.href);
-        const hq = parseHashQuery();
-        hq.set("add", "0");
-        const newHash = "#/?" + hq.toString();
-        window.history.replaceState({}, "", next.pathname + next.search + newHash);
+        // 동일 해시 반복 호출 방지: add=0으로 치환
+        query.set("add", "0");
+        const rest = query.toString();
+        window.history.replaceState({}, "", getBasePath() + (rest ? `#/?${rest}` : "#/"));
       }
     }
     handleHash();
@@ -288,6 +322,9 @@ export function App() {
             <br />- 데스크톱: “북마클릿”을 만들면 유튜브 재생 중 버튼처럼 쓸 수 있어요.
           </div>
           <div style={{ display: "flex", gap: 8, padding: 10 }}>
+            <button className="btn small primary" onClick={() => setModal({ type: "shareLink" })}>
+              링크 공유
+            </button>
             <button className="btn small" onClick={() => setModal({ type: "bookmarklet" })}>
               북마클릿
             </button>
@@ -426,6 +463,63 @@ export function App() {
       ) : null}
 
       {modal?.type === "bookmarklet" ? <BookmarkletModal onClose={() => setModal(null)} /> : null}
+
+      {modal?.type === "shareLink" ? (
+        <ShareLinkModal
+          state={state}
+          selectedPlaylistId={selectedPlaylist.id}
+          onClose={() => setModal(null)}
+          onCopy={copyToClipboard}
+          onOpenImport={(encoded) => setModal({ type: "applyImport", encoded })}
+        />
+      ) : null}
+
+      {modal?.type === "applyImport" ? (
+        <ApplyImportModal
+          encoded={modal.encoded}
+          onClose={() => setModal(null)}
+          onApply={(mode, imported) => {
+            if (mode === "replace") {
+              const fixed: StoredStateV1 = {
+                version: 1,
+                playlists: imported.playlists.length ? imported.playlists : state.playlists,
+                selectedPlaylistId: imported.playlists[0]?.id || state.selectedPlaylistId
+              };
+              fixed.selectedPlaylistId = pickDefaultPlaylistId(fixed);
+              setState(fixed);
+              setStatus("가져오기 완료(덮어쓰기)");
+              setTimeout(() => setStatus(""), 1200);
+              return;
+            }
+
+            // merge: 이름 충돌 시 "(가져옴)" suffix
+            const existingNames = new Set(state.playlists.map((p) => p.name.trim().toLowerCase()));
+            const merged = imported.playlists.map((p) => {
+              const base = p.name || "가져온 목록";
+              let name = base;
+              let k = name.trim().toLowerCase();
+              if (existingNames.has(k)) {
+                let i = 2;
+                while (existingNames.has(`${k} (${i})`)) i++;
+                name = `${base} (${i})`;
+                k = name.trim().toLowerCase();
+              }
+              existingNames.add(k);
+              return { ...p, name };
+            });
+
+            const next: StoredStateV1 = {
+              version: 1,
+              playlists: [...state.playlists, ...merged],
+              selectedPlaylistId: state.selectedPlaylistId
+            };
+            next.selectedPlaylistId = pickDefaultPlaylistId(next);
+            setState(next);
+            setStatus("가져오기 완료(병합)");
+            setTimeout(() => setStatus(""), 1200);
+          }}
+        />
+      ) : null}
     </div>
   );
 }
@@ -759,6 +853,177 @@ function BookmarkletModal(props: { onClose: () => void }) {
 
       <div className="help">북마클릿 (복사해서 북마크 URL에 붙여넣기)</div>
       <textarea className="input" value={bookmarklet} readOnly rows={4} />
+    </Modal>
+  );
+}
+
+function ShareLinkModal(props: {
+  state: StoredStateV1;
+  selectedPlaylistId: string;
+  onClose: () => void;
+  onCopy: (text: string) => Promise<void>;
+  onOpenImport: (encoded: string) => void;
+}) {
+  const [scope, setScope] = useState<"all" | "selected">("all");
+  const [includeThumbnails, setIncludeThumbnails] = useState(false);
+  const [paste, setPaste] = useState("");
+
+  const encoded = useMemo(() => {
+    return encodeShareFromState(
+      { ...props.state, selectedPlaylistId: props.selectedPlaylistId },
+      { scope, includeThumbnails }
+    );
+  }, [props.state, props.selectedPlaylistId, scope, includeThumbnails]);
+
+  const link = useMemo(() => {
+    const base = window.location.origin + getBasePath();
+    return `${base}#/import?d=${encodeURIComponent(encoded)}`;
+  }, [encoded]);
+
+  const approxLen = link.length;
+  const maybeTooLong = approxLen > 6000;
+
+  return (
+    <Modal
+      title="링크로 공유하기"
+      onClose={props.onClose}
+      footer={
+        <>
+          <button className="btn" onClick={props.onClose}>
+            닫기
+          </button>
+          <button className="btn primary" onClick={() => props.onCopy(link)}>
+            링크 복사
+          </button>
+        </>
+      }
+    >
+      <div className="help">
+        이 링크에는 재생목록/태그/영상 정보가 **압축되어 그대로 포함**됩니다. 길어지면 메신저에서 잘릴 수 있어요.
+        <br />
+        현재 길이: <span className="kbd">{approxLen}</span>{" "}
+        {maybeTooLong ? <span className="muted">(권장: JSON 내보내기 사용)</span> : null}
+      </div>
+
+      <div className="two">
+        <div>
+          <div className="help">공유 범위</div>
+          <select className="input" value={scope} onChange={(e) => setScope(e.target.value as "all" | "selected")}>
+            <option value="all">전체 재생목록</option>
+            <option value="selected">현재 재생목록만</option>
+          </select>
+        </div>
+        <div>
+          <div className="help">옵션</div>
+          <label style={{ display: "flex", gap: 10, alignItems: "center", padding: "10px 0" }}>
+            <input
+              type="checkbox"
+              checked={includeThumbnails}
+              onChange={(e) => setIncludeThumbnails(e.target.checked)}
+            />
+            <span>썸네일까지 포함(링크가 더 길어질 수 있음)</span>
+          </label>
+        </div>
+      </div>
+
+      <div className="help">공유 링크</div>
+      <textarea className="input" value={link} readOnly rows={3} />
+
+      <div className="panel" style={{ padding: 12 }}>
+        <div style={{ fontWeight: 800, marginBottom: 6 }}>받은 링크/페이로드로 가져오기</div>
+        <div className="help">
+          상대가 준 링크 전체를 붙여넣어도 되고, <span className="kbd">v1.xxxxxx</span> 형태의 페이로드만 붙여넣어도 됩니다.
+        </div>
+        <input className="input" value={paste} onChange={(e) => setPaste(e.target.value)} placeholder="여기에 붙여넣기" />
+        <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+          <button
+            className="btn small primary"
+            onClick={() => {
+              const extracted = extractSharePayloadFromUrlOrHash(paste);
+              if (!extracted) return;
+              props.onOpenImport(extracted);
+            }}
+            disabled={!paste.trim()}
+          >
+            가져오기 미리보기
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function ApplyImportModal(props: {
+  encoded: string;
+  onClose: () => void;
+  onApply: (mode: "replace" | "merge", imported: StoredStateV1) => void;
+}) {
+  const [error, setError] = useState<string>("");
+  const [imported, setImported] = useState<StoredStateV1 | null>(null);
+
+  useEffect(() => {
+    try {
+      const decoded = decodeShareToState(props.encoded);
+      if (!decoded.playlists.length) throw new Error("empty");
+      setImported(decoded);
+      setError("");
+    } catch {
+      setImported(null);
+      setError("링크 데이터를 해석할 수 없어요(손상/버전 불일치).");
+    }
+  }, [props.encoded]);
+
+  return (
+    <Modal
+      title="링크 가져오기"
+      onClose={props.onClose}
+      footer={
+        <>
+          <button className="btn" onClick={props.onClose}>
+            취소
+          </button>
+          <button className="btn" disabled={!imported} onClick={() => imported && props.onApply("merge", imported)}>
+            병합
+          </button>
+          <button className="btn primary" disabled={!imported} onClick={() => imported && props.onApply("replace", imported)}>
+            덮어쓰기
+          </button>
+        </>
+      }
+    >
+      {error ? <div className="help">{error}</div> : null}
+      {imported ? (
+        <div className="panel" style={{ padding: 12 }}>
+          <div style={{ fontWeight: 850, marginBottom: 6 }}>가져올 내용</div>
+          <div className="help">
+            재생목록: <span className="kbd">{imported.playlists.length}</span>
+            <br />
+            영상 합계:{" "}
+            <span className="kbd">
+              {imported.playlists.reduce((sum, p) => sum + p.items.length, 0)}
+            </span>
+          </div>
+          <div style={{ marginTop: 10, display: "grid", gap: 8 }}>
+            {imported.playlists.slice(0, 6).map((p) => (
+              <div key={p.id} className="playlist-row" style={{ cursor: "default" }}>
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div style={{ fontWeight: 750, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {p.name}
+                  </div>
+                  <div className="muted" style={{ fontSize: 12 }}>
+                    {p.items.length}개
+                  </div>
+                </div>
+              </div>
+            ))}
+            {imported.playlists.length > 6 ? <div className="help">…외 {imported.playlists.length - 6}개</div> : null}
+          </div>
+        </div>
+      ) : null}
+      <div className="help">
+        - <span className="kbd">병합</span>: 현재 데이터는 유지하고, 가져온 재생목록을 추가합니다.
+        <br />- <span className="kbd">덮어쓰기</span>: 현재 데이터를 가져온 내용으로 교체합니다.
+      </div>
     </Modal>
   );
 }
