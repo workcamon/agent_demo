@@ -59,6 +59,7 @@ export function App() {
   const [searchQuery, setSearchQuery] = useState("");
   const [modal, setModal] = useState<ModalState>(null);
   const [status, setStatus] = useState<string>("");
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const selectedPlaylist = useMemo(() => {
     return state.playlists.find((p) => p.id === state.selectedPlaylistId) || state.playlists[0]!;
@@ -74,7 +75,6 @@ export function App() {
     saveStoredState(state);
   }, [state]);
 
-  // /share (Web Share Target) → hash 기반 add로 변환
   useEffect(() => {
     const url = new URL(window.location.href);
     if (url.pathname === "/share") {
@@ -90,7 +90,6 @@ export function App() {
     }
   }, []);
 
-  // deep link: #/?add=1&url=...
   useEffect(() => {
     function handleHash() {
       const q = parseHashQuery();
@@ -100,7 +99,6 @@ export function App() {
         const title = q.get("title") || undefined;
         const text = q.get("text") || undefined;
         setModal({ type: "addVideo", presetUrl: url, presetTitle: title, presetText: text });
-        // 동일 해시 반복 호출 방지: add=0으로 치환(사용자 히스토리는 유지)
         const next = new URL(window.location.href);
         const hq = parseHashQuery();
         hq.set("add", "0");
@@ -113,8 +111,18 @@ export function App() {
     return () => window.removeEventListener("hashchange", handleHash);
   }, []);
 
+  useEffect(() => {
+    if (!sidebarOpen) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") setSidebarOpen(false);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [sidebarOpen]);
+
   function selectPlaylist(playlistId: string) {
     setState((s) => ({ ...s, selectedPlaylistId: playlistId }));
+    setSidebarOpen(false);
   }
 
   function onCreatePlaylist(name: string) {
@@ -224,7 +232,8 @@ export function App() {
 
   return (
     <div className="app">
-      <aside className="sidebar">
+      {sidebarOpen && <div className="sidebar-overlay" onClick={() => setSidebarOpen(false)} />}
+      <aside className={`sidebar${sidebarOpen ? " open" : ""}`}>
         <div className="sidebar-header">
           <div className="brand">
             <img src="/icon.svg" alt="" />
@@ -234,11 +243,14 @@ export function App() {
             </div>
           </div>
           <div className="sidebar-actions">
-            <button className="btn small primary" onClick={() => setModal({ type: "addVideo" })} title="영상 추가">
+            <button className="btn small primary" onClick={() => { setModal({ type: "addVideo" }); setSidebarOpen(false); }} title="영상 추가">
               + 영상
             </button>
-            <button className="btn small" onClick={() => setModal({ type: "playlist", mode: "create" })} title="목록 추가">
+            <button className="btn small" onClick={() => { setModal({ type: "playlist", mode: "create" }); setSidebarOpen(false); }} title="목록 추가">
               + 목록
+            </button>
+            <button className="btn small sidebar-close-btn" onClick={() => setSidebarOpen(false)} aria-label="닫기">
+              ✕
             </button>
           </div>
         </div>
@@ -267,6 +279,7 @@ export function App() {
                   onClick={(e) => {
                     e.stopPropagation();
                     setModal({ type: "playlist", mode: "rename", playlistId: pl.id });
+                    setSidebarOpen(false);
                   }}
                 >
                   이름
@@ -284,14 +297,14 @@ export function App() {
             </div>
           ))}
           <div className="help" style={{ padding: "10px 10px 2px" }}>
-            - 모바일: 설치 후 유튜브 앱/브라우저에서 “공유 → 이 앱”으로 바로 추가 가능해요.
-            <br />- 데스크톱: “북마클릿”을 만들면 유튜브 재생 중 버튼처럼 쓸 수 있어요.
+            - 모바일: 설치 후 유튜브 앱/브라우저에서 "공유 → 이 앱"으로 바로 추가 가능해요.
+            <br />- 데스크톱: "북마클릿"을 만들면 유튜브 재생 중 버튼처럼 쓸 수 있어요.
           </div>
-          <div style={{ display: "flex", gap: 8, padding: 10 }}>
-            <button className="btn small" onClick={() => setModal({ type: "bookmarklet" })}>
+          <div style={{ display: "flex", gap: 8, padding: 10, flexWrap: "wrap" }}>
+            <button className="btn small" onClick={() => { setModal({ type: "bookmarklet" }); setSidebarOpen(false); }}>
               북마클릿
             </button>
-            <button className="btn small" onClick={() => setModal({ type: "importExport" })}>
+            <button className="btn small" onClick={() => { setModal({ type: "importExport" }); setSidebarOpen(false); }}>
               가져오기/내보내기
             </button>
           </div>
@@ -300,25 +313,28 @@ export function App() {
 
       <main className="main">
         <div className="toolbar">
-          <div style={{ minWidth: 0 }}>
-            <div style={{ fontWeight: 850, letterSpacing: "-0.02em", fontSize: 18 }}>{selectedPlaylist.name}</div>
-            <div className="muted" style={{ fontSize: 12 }}>
+          <button className="btn hamburger-btn" onClick={() => setSidebarOpen(true)} aria-label="메뉴 열기">
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><rect y="3" width="20" height="2" rx="1" fill="currentColor"/><rect y="9" width="20" height="2" rx="1" fill="currentColor"/><rect y="15" width="20" height="2" rx="1" fill="currentColor"/></svg>
+          </button>
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <div className="toolbar-title">{selectedPlaylist.name}</div>
+            <div className="muted toolbar-status">
               {status ? status : "검색 예: 3분 요약  #개발  #음악"}
             </div>
           </div>
           <input
-            className="input"
+            className="input toolbar-search"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="검색 (단어 또는 #태그)"
           />
-          <button className="btn primary" onClick={() => setModal({ type: "addVideo" })}>
+          <button className="btn primary add-video-btn-desktop" onClick={() => setModal({ type: "addVideo" })}>
             + 영상 추가
           </button>
         </div>
 
         {allTags.length ? (
-          <div style={{ marginBottom: 12, display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <div className="tags-bar">
             {allTags.map(([tag, count]) => (
               <span
                 key={tag}
@@ -336,12 +352,12 @@ export function App() {
         ) : null}
 
         {filteredItems.length === 0 ? (
-          <div className="panel" style={{ padding: 16 }}>
+          <div className="panel empty-state">
             <div style={{ fontWeight: 750, marginBottom: 6 }}>아직 저장한 영상이 없어요</div>
             <div className="help">
               - 유튜브 영상 URL을 붙여넣거나
-              <br />- 모바일에서 “공유 → 이 앱”으로 추가하거나
-              <br />- 데스크톱에서는 북마클릿으로 “재생 중 추가”처럼 쓸 수 있어요.
+              <br />- 모바일에서 "공유 → 이 앱"으로 추가하거나
+              <br />- 데스크톱에서는 북마클릿으로 "재생 중 추가"처럼 쓸 수 있어요.
             </div>
           </div>
         ) : (
@@ -361,6 +377,14 @@ export function App() {
             ))}
           </div>
         )}
+
+        <button
+          className="fab"
+          onClick={() => setModal({ type: "addVideo" })}
+          aria-label="영상 추가"
+        >
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M12 5v14M5 12h14" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"/></svg>
+        </button>
       </main>
 
       {modal?.type === "playlist" ? (
@@ -443,31 +467,16 @@ function VideoCard(props: {
 
   return (
     <div className="card">
-      <div className="thumb">
+      <a className="thumb" href={item.url} target="_blank" rel="noreferrer noopener">
         {item.thumbnailUrl ? <img src={item.thumbnailUrl} alt="" loading="lazy" /> : <span className="muted">No image</span>}
-      </div>
+      </a>
       <div className="card-body">
-        <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
-          <div style={{ minWidth: 0, flex: 1 }}>
-            <a className="title" href={item.url} target="_blank" rel="noreferrer noopener">
-              {title}
-            </a>
-            <div className="meta">
-              <span className="pill">{formatDateTime(item.addedAt)}</span>
-              {item.videoId ? <span className="pill">ID: {item.videoId}</span> : null}
-            </div>
-          </div>
-          <div className="row-actions">
-            <button className="btn small" onClick={props.onEditTags}>
-              태그
-            </button>
-            <button className="btn small" onClick={props.onMove}>
-              이동
-            </button>
-            <button className="btn small danger" onClick={props.onRemove}>
-              삭제
-            </button>
-          </div>
+        <a className="title" href={item.url} target="_blank" rel="noreferrer noopener">
+          {title}
+        </a>
+        <div className="meta">
+          <span className="pill">{formatDateTime(item.addedAt)}</span>
+          {item.videoId ? <span className="pill">ID: {item.videoId}</span> : null}
         </div>
 
         {displayTags.length ? (
@@ -479,10 +488,22 @@ function VideoCard(props: {
             ))}
           </div>
         ) : (
-          <div className="help" style={{ marginTop: 10 }}>
+          <div className="help" style={{ marginTop: 8 }}>
             태그가 없어요. <span className="kbd">태그</span> 버튼으로 추가하면 검색이 쉬워져요.
           </div>
         )}
+
+        <div className="card-actions">
+          <button className="btn small" onClick={props.onEditTags}>
+            태그
+          </button>
+          <button className="btn small" onClick={props.onMove}>
+            이동
+          </button>
+          <button className="btn small danger" onClick={props.onRemove}>
+            삭제
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -734,7 +755,7 @@ function BookmarkletModal(props: { onClose: () => void }) {
 
   return (
     <Modal
-      title="데스크톱용 ‘재생 중 추가’ (북마클릿)"
+      title="데스크톱용 '재생 중 추가' (북마클릿)"
       onClose={props.onClose}
       footer={
         <>
@@ -745,7 +766,7 @@ function BookmarkletModal(props: { onClose: () => void }) {
       }
     >
       <div className="help">
-        브라우저 확장 없이 “유튜브 재생 중 버튼” 느낌을 내려면 **북마클릿**이 가장 현실적인 방법이에요.
+        브라우저 확장 없이 "유튜브 재생 중 버튼" 느낌을 내려면 **북마클릿**이 가장 현실적인 방법이에요.
         <br />
         1) 앱이 배포된 주소를 넣고
         <br />
@@ -762,4 +783,3 @@ function BookmarkletModal(props: { onClose: () => void }) {
     </Modal>
   );
 }
-

@@ -10,8 +10,12 @@ export function Modal(props: {
     function onKeyDown(e: KeyboardEvent) {
       if (e.key === "Escape") props.onClose();
     }
+    document.body.style.overflow = "hidden";
     window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+    return () => {
+      document.body.style.overflow = "";
+      window.removeEventListener("keydown", onKeyDown);
+    };
   }, [props]);
 
   return (
@@ -27,7 +31,7 @@ export function Modal(props: {
         </div>
         <div className="modal-body">{props.children}</div>
         {props.footer ? (
-          <div className="modal-header" style={{ borderTop: "1px solid var(--border)", borderBottom: "none" }}>
+          <div className="modal-footer">
             <div style={{ flex: 1 }} />
             {props.footer}
           </div>
@@ -36,4 +40,3 @@ export function Modal(props: {
     </div>
   );
 }
-
